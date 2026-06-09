@@ -170,6 +170,139 @@ def _driver_laps(loaded, driver: str) -> pd.DataFrame:
     return driver_laps
 
 
+
+
+def _lap_seconds_list(laps: pd.DataFrame) -> list[float]:
+    values: list[float] = []
+    for value in laps.get("LapTime", []):
+        seconds = _to_seconds(value)
+        if seconds is not None:
+            values.append(seconds)
+    return values
+
+
+def _speed_values(laps: pd.DataFrame) -> list[float]:
+    values: list[float] = []
+    for col in ["SpeedST", "SpeedFL", "SpeedI1", "SpeedI2"]:
+        if col not in laps.columns:
+            continue
+        for value in laps[col].dropna():
+            speed = _safe_float(value, 1)
+            if speed is not None and speed > 0:
+                values.append(speed)
+    return values
+
+
+def _compound_name(value: Any) -> str:
+    if value is None or pd.isna(value):
+        return "Unknown"
+    return str(value).title()
+
+
+def _driver_profile(laps: pd.DataFrame, driver: str) -> dict[str, Any]:
+    lap_times = _lap_seconds_list(laps)
+    speeds = _speed_values(laps)
+
+    best_lap = None
+    if lap_times:
+        best_idx = None
+        best_time = 999999.0
+        for idx, row in laps.iterrows():
+            seconds = _to_seconds(row.get("LapTime"))
+            if seconds is not None and seconds < best_time:
+                best_time = seconds
+                best_idx = idx
+        if best_idx is not None:
+            row = laps.loc[best_idx]
+            best_lap = {
+                "lap": _safe_int(row.get("LapNumber")),
+                "lapTime": _to_seconds(row.get("LapTime")),
+                "compound": _clean_value(row.get("Compound")),
+                "tyreLife": _safe_int(row.get("TyreLife")),
+            }
+
+    stints: list[dict[str, Any]] = []
+    if not laps.empty and "Stint" in laps.columns:
+        sorted_laps = laps.sort_values("LapNumber")
+        grouped = sorted_laps.groupby("Stint", dropna=True)
+        for stint_number, group in grouped:
+            if group.empty:
+                continue
+            first = group.iloc[0]
+            last = group.iloc[-1]
+            compounds = [x for x in group.get("Compound", pd.Series(dtype=object)).dropna().unique()]
+            compound = _compound_name(compounds[0]) if compounds else "Unknown"
+            start_lap = _safe_int(first.get("LapNumber"))
+            end_lap = _safe_int(last.get("LapNumber"))
+            stints.append({
+                "stint": _safe_int(stint_number),
+                "compound": compound,
+                "startLap": start_lap,
+                "endLap": end_lap,
+                "length": (end_lap - start_lap + 1) if start_lap and end_lap else None,
+                "startTyreLife": _safe_int(first.get("TyreLife")),
+                "endTyreLife": _safe_int(last.get("TyreLife")),
+                "pitLap": start_lap if len(stints) > 0 else None,
+            })
+
+    compounds: dict[str, int] = {}
+    if "Compound" in laps.columns:
+        for value in laps["Compound"].dropna():
+            name = _compound_name(value)
+            compounds[name] = compounds.get(name, 0) + 1
+
+    return {
+        "driver": driver,
+        "lapCount": len(lap_times),
+        "bestLap": best_lap,
+        "averageLap": round(float(np.mean(lap_times)), 3) if lap_times else None,
+        "medianLap": round(float(np.median(lap_times)), 3) if lap_times else None,
+        "consistency": round(float(np.std(lap_times)), 3) if len(lap_times) > 1 else None,
+        "topSpeedMax": round(float(np.max(speeds)), 1) if speeds else None,
+        "topSpeedAvg": round(float(np.mean(speeds)), 1) if speeds else None,
+        "stints": stints,
+        "compounds": [{"compound": k, "laps": v} for k, v in compounds.items()],
+    }
+
+
+def _advantage_label(a_value: Optional[float], b_value: Optional[float], driver_a: str, driver_b: str, lower_is_better: bool = True) -> dict[str, Any]:
+    if a_value is None or b_value is None:
+        return {"driver": None, "amount": None}
+    diff = round(abs(a_value - b_value), 3)
+    if abs(a_value - b_value) < 0.001:
+        return {"driver": "Even", "amount": 0}
+    if lower_is_better:
+        return {"driver": driver_a if a_value < b_value else driver_b, "amount": diff}
+    return {"driver": driver_a if a_value > b_value else driver_b, "amount": diff}
+
+
+def _build_observed_insights(profile_a: dict[str, Any], profile_b: dict[str, Any], driver_a: str, driver_b: str, avg_delta: Optional[float]) -> list[dict[str, str]]:
+    insights: list[dict[str, str]] = []
+
+    if avg_delta is not None:
+        if avg_delta > 0:
+            insights.append({"title": f"{driver_a} race pace edge", "body": f"Across shared laps, {driver_a} was ahead by {abs(avg_delta):.3f}s on average. That points to stronger observed race pace in this comparison."})
+        elif avg_delta < 0:
+            insights.append({"title": f"{driver_b} race pace edge", "body": f"Across shared laps, {driver_b} was ahead by {abs(avg_delta):.3f}s on average. That points to stronger observed race pace in this comparison."})
+        else:
+            insights.append({"title": "Even race pace", "body": "The average lap-time delta was essentially even across the comparable laps."})
+
+    speed = _advantage_label(profile_a.get("topSpeedAvg"), profile_b.get("topSpeedAvg"), driver_a, driver_b, lower_is_better=False)
+    if speed["driver"] and speed["driver"] != "Even" and speed["amount"] is not None:
+        insights.append({"title": f"{speed['driver']} straight-line profile", "body": f"The speed-trap data favoured {speed['driver']} by about {speed['amount']:.1f} km/h on average. This suggests a stronger straight-line profile, not necessarily a confirmed setup choice."})
+
+    consistency = _advantage_label(profile_a.get("consistency"), profile_b.get("consistency"), driver_a, driver_b, lower_is_better=True)
+    if consistency["driver"] and consistency["driver"] != "Even" and consistency["amount"] is not None:
+        insights.append({"title": f"{consistency['driver']} consistency", "body": f"{consistency['driver']} had the smaller lap-time spread by roughly {consistency['amount']:.3f}s. That usually indicates a cleaner or more stable race phase."})
+
+    stints_a = profile_a.get("stints") or []
+    stints_b = profile_b.get("stints") or []
+    if stints_a or stints_b:
+        insights.append({"title": "Tyre strategy context", "body": "Pit and compound changes can explain many delta swings. Treat the lap-time trace together with stint length and tyre age rather than as pure car pace."})
+
+    insights.append({"title": "Important limitation", "body": "These are observed performance differences from timing, tyre and speed data. They do not directly reveal wing level, engine mode, fuel load, ride height or tyre temperature."})
+    return insights[:5]
+
 @app.get("/api/compare/all-laps")
 def compare_all_laps(year: int, event: str, session: str, driverA: str, driverB: str) -> dict[str, Any]:
     loaded = _load_session(year, event, session, telemetry=False)
@@ -194,16 +327,42 @@ def compare_all_laps(year: int, event: str, session: str, driverA: str, driverB:
         time_b = _to_seconds(row_b.get("LapTime"))
         if time_a is None or time_b is None:
             continue
-        delta = round(time_b - time_a, 3)  # negative = B faster, positive = A faster
+
+        delta = round(time_b - time_a, 3)  # positive = A faster, negative = B faster
         faster = driverA if delta > 0 else driverB if delta < 0 else "TIE"
         if faster == driverA:
             faster_a += 1
         elif faster == driverB:
             faster_b += 1
+
         item = {
             "lap": lap_number,
-            "driverA": {"code": driverA, "lapTime": time_a, "compound": _clean_value(row_a.get("Compound")), "tyreLife": _safe_int(row_a.get("TyreLife")), "stint": _safe_int(row_a.get("Stint"))},
-            "driverB": {"code": driverB, "lapTime": time_b, "compound": _clean_value(row_b.get("Compound")), "tyreLife": _safe_int(row_b.get("TyreLife")), "stint": _safe_int(row_b.get("Stint"))},
+            "driverA": {
+                "code": driverA,
+                "lapTime": time_a,
+                "compound": _clean_value(row_a.get("Compound")),
+                "tyreLife": _safe_int(row_a.get("TyreLife")),
+                "stint": _safe_int(row_a.get("Stint")),
+                "sector1": _to_seconds(row_a.get("Sector1Time")),
+                "sector2": _to_seconds(row_a.get("Sector2Time")),
+                "sector3": _to_seconds(row_a.get("Sector3Time")),
+                "speedST": _safe_float(row_a.get("SpeedST"), 1),
+                "speedFL": _safe_float(row_a.get("SpeedFL"), 1),
+                "position": _safe_int(row_a.get("Position")),
+            },
+            "driverB": {
+                "code": driverB,
+                "lapTime": time_b,
+                "compound": _clean_value(row_b.get("Compound")),
+                "tyreLife": _safe_int(row_b.get("TyreLife")),
+                "stint": _safe_int(row_b.get("Stint")),
+                "sector1": _to_seconds(row_b.get("Sector1Time")),
+                "sector2": _to_seconds(row_b.get("Sector2Time")),
+                "sector3": _to_seconds(row_b.get("Sector3Time")),
+                "speedST": _safe_float(row_b.get("SpeedST"), 1),
+                "speedFL": _safe_float(row_b.get("SpeedFL"), 1),
+                "position": _safe_int(row_b.get("Position")),
+            },
             "delta": delta,
             "faster": faster,
         }
@@ -215,11 +374,37 @@ def compare_all_laps(year: int, event: str, session: str, driverA: str, driverB:
         if closest is None or abs(delta) < abs(closest["delta"]):
             closest = item
 
-    avg_delta = round(float(np.mean([x["delta"] for x in lap_rows])), 3) if lap_rows else None
+    deltas = [x["delta"] for x in lap_rows]
+    avg_delta = round(float(np.mean(deltas)), 3) if deltas else None
+
+    profile_a = _driver_profile(laps_a, driverA)
+    profile_b = _driver_profile(laps_b, driverB)
+
+    pace_advantage = _advantage_label(profile_a.get("medianLap"), profile_b.get("medianLap"), driverA, driverB, lower_is_better=True)
+    speed_advantage = _advantage_label(profile_a.get("topSpeedAvg"), profile_b.get("topSpeedAvg"), driverA, driverB, lower_is_better=False)
+    consistency_advantage = _advantage_label(profile_a.get("consistency"), profile_b.get("consistency"), driverA, driverB, lower_is_better=True)
+
     return {
         "session": {"year": year, "event": event, "session": session, "sessionName": SESSION_NAMES.get(session, session)},
         "drivers": {"a": driverA, "b": driverB},
-        "summary": {"lapsCompared": len(lap_rows), "fasterA": faster_a, "fasterB": faster_b, "averageDelta": avg_delta, "bestA": best_a, "bestB": best_b, "closest": closest},
+        "summary": {
+            "lapsCompared": len(lap_rows),
+            "fasterA": faster_a,
+            "fasterB": faster_b,
+            "averageDelta": avg_delta,
+            "bestA": best_a,
+            "bestB": best_b,
+            "closest": closest,
+        },
+        "profiles": {"a": profile_a, "b": profile_b},
+        "carProfile": {
+            "paceAdvantage": pace_advantage,
+            "speedAdvantage": speed_advantage,
+            "consistencyAdvantage": consistency_advantage,
+            "speedDeltaAvg": round((profile_a.get("topSpeedAvg") or 0) - (profile_b.get("topSpeedAvg") or 0), 1) if profile_a.get("topSpeedAvg") is not None and profile_b.get("topSpeedAvg") is not None else None,
+            "medianDelta": round((profile_b.get("medianLap") or 0) - (profile_a.get("medianLap") or 0), 3) if profile_a.get("medianLap") is not None and profile_b.get("medianLap") is not None else None,
+        },
+        "insights": _build_observed_insights(profile_a, profile_b, driverA, driverB, avg_delta),
         "laps": lap_rows,
     }
 
