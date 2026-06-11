@@ -49,6 +49,50 @@ function compoundClass(compound) {
   return 'unknown';
 }
 
+
+function compoundColor(compound) {
+  const type = compoundClass(compound);
+  if (type === 'soft') return '#ff3b30';
+  if (type === 'medium') return '#ffd60a';
+  if (type === 'hard') return '#f5f5f7';
+  if (type === 'inter') return '#34c759';
+  if (type === 'wet') return '#0a84ff';
+  return '#8e8e93';
+}
+
+function CompoundDot(props) {
+  const { cx, cy, payload } = props;
+  if (cx === undefined || cy === undefined || !payload) return null;
+  return <circle cx={cx} cy={cy} r={4.5} fill={compoundColor(payload.compound)} stroke="#fff" strokeWidth={1.4} />;
+}
+
+function LapTooltip({ active, payload, label, name }) {
+  if (!active || !payload?.length) return null;
+  const row = payload[0].payload;
+  return <div className="chart-tooltip"><strong>{name} · Lap {label}</strong><span>{fmtTime(row.lapTime)}</span><span>{row.compound || 'Unknown tyre'}{row.tyreLife !== null && row.tyreLife !== undefined ? ` · ${row.tyreLife}L` : ''}</span>{row.pitted ? <em>PIT / tyre change</em> : null}</div>;
+}
+
+function DriverLapTimeChart({ title, data, color }) {
+  return (
+    <div className="glass driver-chart-card">
+      <div className="card-title-row compact">
+        <div><div className="chart-driver-title" style={{ color }}>{title}</div><p>Actual lap time by lap. Dots show the tyre compound used on each lap.</p></div>
+        <div className="mini-legend tyre-mini-legend"><span><i className="soft" />S</span><span><i className="medium" />M</span><span><i className="hard" />H</span><span><i className="inter" />I</span><span><i className="wet" />W</span></div>
+      </div>
+      <ResponsiveContainer width="100%" height={270}>
+        <LineChart data={data} margin={{ left: 8, right: 18, top: 18, bottom: 8 }}>
+          <CartesianGrid stroke={GRID} vertical={false} />
+          <XAxis dataKey="lap" tickLine={false} axisLine={false} tick={{ fill: MUTED, fontSize: 11 }} />
+          <YAxis dataKey="lapTime" tickLine={false} axisLine={false} width={54} tick={{ fill: MUTED, fontSize: 11 }} domain={["dataMin - 0.5", "dataMax + 0.5"]} tickFormatter={(value) => fmtTime(value)} />
+          <Tooltip content={<LapTooltip name={title} />} cursor={{ stroke: GRID }} />
+          <Line dataKey="lapTime" type="monotone" stroke={color} strokeWidth={2.6} dot={<CompoundDot />} activeDot={{ r: 6, stroke: color, strokeWidth: 2 }} connectNulls />
+        </LineChart>
+      </ResponsiveContainer>
+      <div className="tyre-strip">{data.map((row) => <span key={`${title}-${row.lap}`} className={`tyre-strip-dot ${compoundClass(row.compound)} ${row.pitted ? 'pit' : ''}`} title={`Lap ${row.lap}: ${row.compound || 'Unknown'}${row.tyreLife !== null && row.tyreLife !== undefined ? ` · ${row.tyreLife}L` : ''}`} />)}</div>
+    </div>
+  );
+}
+
 function TyreChip({ compound, tyreLife }) {
   const label = compound || '—';
   return (
@@ -369,34 +413,16 @@ function Overview({ selection, onBack }) {
   const colorA = cssColor(data?.entities?.a?.color, '#3671C6');
   const colorB = cssColor(data?.entities?.b?.color, '#FF8000');
 
-  const tyreDegChart = useMemo(() => {
+  const lapTimeCharts = useMemo(() => {
     const laps = data?.laps || [];
-    const stintBaseA = new Map();
-    const stintBaseB = new Map();
-
-    return laps.map((row) => {
-      const stintA = row.driverA?.stint || 'race';
-      const stintB = row.driverB?.stint || 'race';
-      const timeA = row.driverA?.lapTime;
-      const timeB = row.driverB?.lapTime;
-
-      if (!stintBaseA.has(stintA) && timeA !== null && timeA !== undefined) stintBaseA.set(stintA, timeA);
-      if (!stintBaseB.has(stintB) && timeB !== null && timeB !== undefined) stintBaseB.set(stintB, timeB);
-
-      const baseA = stintBaseA.get(stintA);
-      const baseB = stintBaseB.get(stintB);
-
-      return {
-        lap: row.lap,
-        [a]: timeA !== null && timeA !== undefined && baseA !== undefined ? Number((timeA - baseA).toFixed(3)) : null,
-        [b]: timeB !== null && timeB !== undefined && baseB !== undefined ? Number((timeB - baseB).toFixed(3)) : null,
-        compoundA: row.driverA?.compound || '—',
-        compoundB: row.driverB?.compound || '—',
-        tyreLifeA: row.driverA?.tyreLife,
-        tyreLifeB: row.driverB?.tyreLife
-      };
+    const buildRows = (key) => laps.map((row, index) => {
+      const current = row[key] || {};
+      const previous = index > 0 ? laps[index - 1]?.[key] : null;
+      const pitted = Boolean(previous && ((current.stint && previous.stint && current.stint !== previous.stint) || (current.compound && previous.compound && current.compound !== previous.compound)));
+      return { lap: row.lap, lapTime: current.lapTime, compound: current.compound || 'Unknown', tyreLife: current.tyreLife, stint: current.stint, pitted, driver: current.driver };
     });
-  }, [data, a, b]);
+    return { a: buildRows('driverA'), b: buildRows('driverB') };
+  }, [data]);
 
   const speedChart = useMemo(() => {
     if (!data?.profiles) return [];
@@ -441,32 +467,12 @@ function Overview({ selection, onBack }) {
               <Metric icon={<Gauge />} label="Average delta" value={fmtDelta(data.summary.averageDelta, a, b)} />
             </div>
 
-            <div className="report-grid">
-              <div className="glass chart-card large-card">
-                <div className="card-title-row">
-                  <div>
-                    <div className="card-title">Tyre degradation trend</div>
-                    <p>Lap-time loss inside each stint, measured against that stint’s first comparable lap.</p>
-                  </div>
-                  <div className="mini-legend"><span><i style={{ background: colorA }} />{a}</span><span><i style={{ background: colorB }} />{b}</span></div>
-                </div>
-                <ResponsiveContainer width="100%" height={300}>
-                  <LineChart data={tyreDegChart} margin={{ left: 8, right: 16, top: 18, bottom: 8 }}>
-                    <CartesianGrid stroke={GRID} vertical={false} />
-                    <XAxis dataKey="lap" tickLine={false} axisLine={false} tick={{ fill: MUTED, fontSize: 11 }} />
-                    <YAxis tickLine={false} axisLine={false} width={50} tick={{ fill: MUTED, fontSize: 11 }} tickFormatter={(value) => `${value}s`} />
-                    <Tooltip
-                      cursor={{ stroke: GRID }}
-                      formatter={(value, name) => [`${Number(value).toFixed(3)}s`, name]}
-                      labelFormatter={(value) => `Lap ${value}`}
-                    />
-                    <Line dataKey={a} type="monotone" stroke={colorA} strokeWidth={3} dot={false} connectNulls />
-                    <Line dataKey={b} type="monotone" stroke={colorB} strokeWidth={3} dot={false} connectNulls />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-              <div className="glass insights-panel"><div className="card-title">Observed difference</div>{(data.insights || []).map((insight, index) => <InsightCard insight={insight} key={index} />)}</div>
+            <div className="driver-chart-grid">
+              <DriverLapTimeChart title={a} data={lapTimeCharts.a} color={colorA} />
+              <DriverLapTimeChart title={b} data={lapTimeCharts.b} color={colorB} />
             </div>
+
+            <div className="glass insights-panel wide-insights"><div className="card-title">Observed difference</div>{(data.insights || []).map((insight, index) => <InsightCard insight={insight} key={index} />)}</div>
 
             <div className="car-profile-grid">
               <AdvantageCard icon={<Activity />} title="Race pace" winner={data.carProfile?.paceAdvantage?.driver} value={data.carProfile?.medianDelta !== null && data.carProfile?.medianDelta !== undefined ? `${fmtDelta(data.carProfile.medianDelta, a, b)} median pace` : null} tone="pace" />
