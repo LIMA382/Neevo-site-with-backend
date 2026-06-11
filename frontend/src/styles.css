@@ -250,3 +250,142 @@ select { width: 100%; border: 1px solid rgba(21,21,21,.10); border-radius: 16px;
   .pit-head { display: none; }
   .pit-row-small { grid-template-columns: 1fr; }
 }
+
+/* V3 visual polish: team-colour headings and cleaner charts */
+.report-hero {
+  overflow: hidden;
+  position: relative;
+}
+
+.report-hero::before,
+.report-hero::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+}
+
+.report-hero::before {
+  left: 0;
+  background: var(--color-a);
+}
+
+.report-hero::after {
+  right: 0;
+  background: var(--color-b);
+}
+
+.entity-heading {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 14px;
+  letter-spacing: -.08em;
+}
+
+.entity-heading .entity-name {
+  font-weight: 950;
+  line-height: .86;
+}
+
+.entity-heading .entity-a {
+  color: var(--color-a);
+}
+
+.entity-heading .entity-b {
+  color: var(--color-b);
+}
+
+.entity-heading em {
+  color: rgba(21,21,21,.22);
+  font-style: normal;
+  font-size: .34em;
+  letter-spacing: -.04em;
+}
+
+.card-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 18px;
+  margin-bottom: 10px;
+}
+
+.card-title-row .card-title {
+  margin-bottom: 4px;
+}
+
+.card-title-row p {
+  margin: 0;
+  max-width: 520px;
+  color: rgba(21,21,21,.52);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.mini-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  color: rgba(21,21,21,.58);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.mini-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.mini-legend i {
+  width: 18px;
+  height: 5px;
+  border-radius: 999px;
+  display: inline-block;
+}
+
+.metric-icon svg {
+  color: var(--metric-color, rgba(29,29,31,.5));
+}
+
+.bar-a {
+  background: var(--color-a, #151515);
+}
+
+.bar-b {
+  background: var(--color-b, #777);
+}
+
+.faster-tag.driver-a {
+  background: color-mix(in srgb, var(--color-a) 16%, white);
+  color: var(--color-a);
+}
+
+.faster-tag.driver-b {
+  background: color-mix(in srgb, var(--color-b) 16%, white);
+  color: var(--color-b);
+}
+
+.chart-card .recharts-wrapper text,
+.speed-card .recharts-wrapper text {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", Arial, sans-serif;
+}
+
+@media (max-width: 920px) {
+  .card-title-row {
+    display: grid;
+  }
+
+  .mini-legend {
+    justify-content: flex-start;
+  }
+
+  .entity-heading {
+    gap: 8px;
+  }
+}
