@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { AreaChart, Area, BarChart, Bar, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { BarChart, Bar, CartesianGrid, LineChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Activity, ArrowRight, ChevronLeft, Flag, Gauge, Search, Timer, Trophy, Users, Wrench, Zap } from 'lucide-react';
 import './styles.css';
 
@@ -369,7 +369,35 @@ function Overview({ selection, onBack }) {
   const colorA = cssColor(data?.entities?.a?.color, '#3671C6');
   const colorB = cssColor(data?.entities?.b?.color, '#FF8000');
 
-  const chartData = useMemo(() => (data?.laps || []).map((x) => ({ lap: x.lap, delta: x.delta })), [data]);
+  const tyreDegChart = useMemo(() => {
+    const laps = data?.laps || [];
+    const stintBaseA = new Map();
+    const stintBaseB = new Map();
+
+    return laps.map((row) => {
+      const stintA = row.driverA?.stint || 'race';
+      const stintB = row.driverB?.stint || 'race';
+      const timeA = row.driverA?.lapTime;
+      const timeB = row.driverB?.lapTime;
+
+      if (!stintBaseA.has(stintA) && timeA !== null && timeA !== undefined) stintBaseA.set(stintA, timeA);
+      if (!stintBaseB.has(stintB) && timeB !== null && timeB !== undefined) stintBaseB.set(stintB, timeB);
+
+      const baseA = stintBaseA.get(stintA);
+      const baseB = stintBaseB.get(stintB);
+
+      return {
+        lap: row.lap,
+        [a]: timeA !== null && timeA !== undefined && baseA !== undefined ? Number((timeA - baseA).toFixed(3)) : null,
+        [b]: timeB !== null && timeB !== undefined && baseB !== undefined ? Number((timeB - baseB).toFixed(3)) : null,
+        compoundA: row.driverA?.compound || '—',
+        compoundB: row.driverB?.compound || '—',
+        tyreLifeA: row.driverA?.tyreLife,
+        tyreLifeB: row.driverB?.tyreLife
+      };
+    });
+  }, [data, a, b]);
+
   const speedChart = useMemo(() => {
     if (!data?.profiles) return [];
     return [
@@ -395,8 +423,8 @@ function Overview({ selection, onBack }) {
         <div className="report-hero glass">
           <div>
             <div className="eyebrow">{selection.year} · {selection.event} · {selection.session} · {selection.compareMode === 'teams' ? 'Team comparison' : 'Driver comparison'}</div>
-            <h1><span>{a}</span><em>vs</em><span>{b}</span></h1>
-            <p>Timing, tyre, stint and speed-trap report. Team colours are used consistently across charts and cards.</p>
+            <h1 className="entity-heading"><span className="entity-name entity-a">{a}</span><em>vs</em><span className="entity-name entity-b">{b}</span></h1>
+            <p>Timing, tyre degradation, stint and speed-trap report. Team colours are used consistently across charts, labels and cards.</p>
           </div>
           <div className="team-color-key"><i style={{ background: colorA }} /><strong>{a}</strong><i style={{ background: colorB }} /><strong>{b}</strong></div>
         </div>
@@ -415,16 +443,26 @@ function Overview({ selection, onBack }) {
 
             <div className="report-grid">
               <div className="glass chart-card large-card">
-                <div className="card-title">Lap delta trend</div>
-                <ResponsiveContainer width="100%" height={270}>
-                  <AreaChart data={chartData} margin={{ left: 8, right: 8, top: 16, bottom: 8 }}>
-                    <defs><linearGradient id="deltaFillV2" x1="0" x2="0" y1="0" y2="1"><stop offset="5%" stopColor={colorA} stopOpacity={0.30} /><stop offset="95%" stopColor={colorB} stopOpacity={0.12} /></linearGradient></defs>
+                <div className="card-title-row">
+                  <div>
+                    <div className="card-title">Tyre degradation trend</div>
+                    <p>Lap-time loss inside each stint, measured against that stint’s first comparable lap.</p>
+                  </div>
+                  <div className="mini-legend"><span><i style={{ background: colorA }} />{a}</span><span><i style={{ background: colorB }} />{b}</span></div>
+                </div>
+                <ResponsiveContainer width="100%" height={300}>
+                  <LineChart data={tyreDegChart} margin={{ left: 8, right: 16, top: 18, bottom: 8 }}>
                     <CartesianGrid stroke={GRID} vertical={false} />
                     <XAxis dataKey="lap" tickLine={false} axisLine={false} tick={{ fill: MUTED, fontSize: 11 }} />
-                    <YAxis tickLine={false} axisLine={false} width={44} tick={{ fill: MUTED, fontSize: 11 }} />
-                    <Tooltip cursor={{ stroke: GRID }} />
-                    <Area dataKey="delta" type="monotone" stroke={INK} fill="url(#deltaFillV2)" strokeWidth={2.4} />
-                  </AreaChart>
+                    <YAxis tickLine={false} axisLine={false} width={50} tick={{ fill: MUTED, fontSize: 11 }} tickFormatter={(value) => `${value}s`} />
+                    <Tooltip
+                      cursor={{ stroke: GRID }}
+                      formatter={(value, name) => [`${Number(value).toFixed(3)}s`, name]}
+                      labelFormatter={(value) => `Lap ${value}`}
+                    />
+                    <Line dataKey={a} type="monotone" stroke={colorA} strokeWidth={3} dot={false} connectNulls />
+                    <Line dataKey={b} type="monotone" stroke={colorB} strokeWidth={3} dot={false} connectNulls />
+                  </LineChart>
                 </ResponsiveContainer>
               </div>
               <div className="glass insights-panel"><div className="card-title">Observed difference</div>{(data.insights || []).map((insight, index) => <InsightCard insight={insight} key={index} />)}</div>
